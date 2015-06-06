@@ -1,0 +1,331 @@
+#!/usr/bin/perl
+
+# Copyright (c) 2015 Andrew Gregory
+# 
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to
+# deal in the Software without restriction, including without limitation the
+# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+# sell copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+# 
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+# 
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+# IN THE SOFTWARE.
+
+use strict;
+use warnings;
+
+our $VERSION = 'v0.0.1';
+
+use List::Util qw( pairkeys );
+
+use ALPM::Conf;
+use Mojolicious::Lite;
+
+sub uniq {
+    my %seen;
+    return grep { not $seen{$_}++; } @_;
+}
+
+helper alpm =>
+  sub { state $alpm = ALPM::Conf->new('/etc/pacman.conf')->parse; };
+
+helper dbs => sub {
+    my ($self) = @_;
+    state $dbs = [ $self->alpm->localdb, $self->alpm->syncdbs ];
+    return @$dbs;
+};
+
+helper pkgs => sub {
+    my ($self) = @_;
+    state $packages = [ map { $_->pkgs } $self->dbs ];
+    return @$packages;
+};
+
+helper groups => sub {
+    my ($self) = @_;
+    state $groups = [ uniq map { pairkeys $_->groups } $self->dbs ];
+    return @$groups;
+};
+
+helper findlocalpkg => sub {
+    my ( $self, $name ) = @_;
+    return $self->alpm->localdb->find($name);
+};
+
+helper findsyncpkg => sub {
+    my ( $self, $name ) = @_;
+    my @pkgs = map { $_->find($name) } $self->alpm->syncdbs;
+    return grep {$_} @pkgs;
+};
+
+helper pkgurl => sub {
+    my ( $self, $pkg ) = @_;
+    my $url = ( $pkg->db->get_servers )[0];
+    return $url . '/' . $pkg->filename;
+};
+
+get '/' => sub {
+    my ($self) = @_;
+    $self->render( 'package/list',
+        packages => [ $self->alpm->localdb->pkgs ] );
+};
+
+get '/database/list' => sub {
+    my ($self) = @_;
+    $self->render( 'database/list', databases => [ $self->dbs ] );
+} => 'dblist';
+
+get '/database/info/:db' => sub {
+    my ($self) = @_;
+    my $db = $self->alpm->db( $self->param('db') );
+    $self->render( 'package/list', packages => [ $db->pkgs ] );
+} => 'dbinfo';
+
+get '/package/info/:db/:pkgname' => sub {
+    my ($self) = @_;
+    my $db = $self->alpm->db( $self->param('db') );
+    $self->render( 'package/info',
+        package => $db->find( $self->param('pkgname') ) );
+} => 'pkginfo';
+
+get '/package/status/upgradable' => sub {
+    my ($self) = @_;
+    $self->render( text => 'Coming Soon' );
+};
+
+get '/package/status/foreign' => sub {
+    my ($self) = @_;
+    $self->render(
+        'package/list',
+        packages => [
+            grep { not scalar $self->findsyncpkg( $_->name ) }
+              $self->alpm->localdb->pkgs
+        ]
+    );
+};
+
+get '/package/status/not-installed' => sub {
+    my ($self) = @_;
+    $self->render(
+        'package/list',
+        packages => [
+            grep { not $self->findlocalpkg( $_->name ) }
+            map  { $_->pkgs } $self->alpm->syncdbs
+        ]
+    );
+};
+
+get '/transaction/install/*pkg' => sub {
+    my ($self) = @_;
+    push @{ $self->session->{transaction}->{install} }, $self->param('pkg');
+    $self->render('transaction/view');
+} => 'install';
+
+get '/transaction/remove/*pkg' => sub {
+    my ($self) = @_;
+    push @{ $self->session->{transaction}->{remove} }, $self->param('pkg');
+    $self->render('transaction/view');
+} => 'remove';
+
+get '/transaction/view' => 'transaction/view';
+
+get '/group/list' => sub {
+    my ($self) = @_;
+    my %groups;
+    foreach my $db ( $self->dbs ) {
+        %groups = ( %groups, $db->groups );
+    }
+    $self->render( 'group/list', groups => [ keys %groups ] );
+} => 'groups';
+
+get '/group/info/:grp' => sub {
+    my ($self) = @_;
+    my @packages;
+    foreach my $db ( $self->dbs ) {
+        push @packages, $db->find_group( $self->param('grp') );
+    }
+    $self->render( 'package/list', packages => [@packages] );
+} => 'groupinfo';
+
+app->defaults( layout => 'main' );
+app->start;
+
+__DATA__
+
+@@ layouts/main.html.ep
+
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" href="http://code.jquery.com/ui/1.11.4/themes/smoothness/jquery-ui.css">
+    <script src="http://code.jquery.com/jquery-1.10.2.js"></script>
+    <script src="http://code.jquery.com/ui/1.11.4/jquery-ui.js"></script>
+    <style>
+        table { border: 1px solid black; }
+        thead + tbody tr:nth-child(odd) { background-color: #dddddd; }
+        th { margin: 0px; padding: 0.1em 0.5em; }
+        td { margin: 0px; padding: 0.1em 0.5em; }
+        .ui-accordion .ui-accordion-content { padding: 0; margin: 0; max-height: 25em; }
+        .ui-accordion ul { list-style-type: none; list-style-position: inside; }
+    </style>
+    <script>
+        $(function() {
+            $('div#sidebar').accordion({heightStyle: 'content'});
+        });
+    </script>
+</head>
+<body>
+<!-- ewww, table based layout until I figure out the correct css -->
+<table style='border: none;'>
+<tr valign='top'>
+<td>
+    <div id='sidebar' style='width: 20em;'>
+        <h3>Status</h3>
+        <div>
+            <ul>
+                <li><%= link_to Installed => dbinfo => {db => 'local'} %></li>
+                <li><%= link_to 'Installed (upgradable)' => '/package/status/upgradable' %></li>
+                <li><%= link_to 'Installed (local or obsolete)' => '/package/status/foreign' %></li>
+                <li><%= link_to 'Not Installed' => '/package/status/not-installed' %></li>
+            </ul>
+        </div>
+        <h3>Source</h3>
+        <div>
+            <ul>
+                % foreach my $db ($c->dbs) {
+                    <li><%= link_to $db->name => 'dbinfo' => {db => $db->name} %></li>
+                % }
+            </ul>
+        </div>
+        <h3>Groups</h3>
+        <div>
+            <ul>
+                % foreach my $g (sort $c->groups) {
+                    <li><%= link_to $g => 'groupinfo' => {grp => $g} %></li>
+                % }
+            </ul>
+        </div>
+        <h3>Search</h3>
+        <div>
+            Coming Soon!
+        </div>
+    </div>
+</td>
+<td>
+    %= content
+</td>
+</tr>
+</table>
+</body>
+</html>
+
+@@ package/info.html.ep
+
+<dl>
+    <dt>Name:</dt><dd><%= $package->name %></dd>
+    <dt>Version:</dt><dd><%= $package->version %></dd>
+    <dt>Database:</dt><dd><%= link_to $package->db->name => dbinfo => {db => $package->db->name } %></dd>
+    <dt>Description:</dt><dd><%= $package->desc %></dd>
+    <dt>URL:</dt><dd><%= link_to $package->url => $package->url %></dd>
+    <dt>Groups:</dt><dd><%= link_to($_ => groupinfo => {grp => $_}) foreach sort @{$package->groups} %></dd>
+    <dt>Packager:</dt><dd><%= $package->packager %></dd>
+    <dt>Arch:</dt><dd><%= $package->arch %></dd>
+    <dt>Files:<dt>
+    <dd>
+        <ul>
+            % foreach my $f ( @{ $package->files } ) {
+                <li>
+                    %= link_to $f->{name} => 'file://' . $c->alpm->get_root . $f->{name}
+                </li>
+            % }
+        </ul>
+    </dd>
+</dl>
+
+% if($package->db->name ne 'local') {
+    %= link_to 'Download from mirror' => $c->pkgurl($package)
+% }
+
+@@ database/list.html.ep
+
+<ul>
+    % foreach my $db (@$databases) {
+        <li><%= link_to $db->name => dbinfo => {db => $db->name} %></li>
+    % }
+</ul>
+
+@@ package/list.html.ep
+
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Version</th>
+            <th>DB</th>
+            <th>Description</th>
+        </tr>
+    </thead>
+    <tbody>
+        % foreach my $pkg (sort { $a->name cmp $b->name } @$packages) {
+            <tr>
+                <td>
+                    %= link_to $pkg->name => 'pkginfo' => {db => $pkg->db->name, pkgname => $pkg->name}
+                </td>
+                <td><%= $pkg->version %></td>
+                <td><%= $pkg->db->name %></td>
+                <td><%= $pkg->desc %></td>
+            </tr>
+        % }
+    </tbody>
+</table>
+
+@@ transaction/view.html.ep
+
+% my $cbopt = begin
+    % my ($name, $label, $title) = @_;
+    <label title='<%= $title %>'><%= check_box $name => 1 %><%= $label %></label>
+% end;
+
+<dd>
+    <dt>Install</dt>
+    % foreach my $pkg (@{ session->{transaction}->{install} }) {
+        <dd><%= link_to $pkg => "/package/info/$pkg" %></dd>
+    % }
+    <dt>Remove</dt>
+    % foreach my $pkg (@{ session->{transaction}->{remove} }) {
+        <dd><%= $pkg %></dd>
+    % }
+</dd>
+<fieldset>
+    <legend>Transaction Options</legend>
+    %= $cbopt->(recurse => 'recurse', 'Remove unneeded dependencies')
+    %= $cbopt->(cascade => 'cascade')
+    %= $cbopt->(nodepversion => 'nodepversion')
+    %= $cbopt->(nodeps => 'nodeps')
+    %= $cbopt->(dbonly => 'dbonly')
+    %= $cbopt->(noscriptlet => 'noscriptlet')
+    %= $cbopt->(force => 'force');
+    %= $cbopt->(asdeps => 'asdeps');
+    %= $cbopt->(asexplicit => 'asexplicit');
+    %= $cbopt->(unneeded => 'unneeded');
+    %= $cbopt->(needed => 'needed');
+    %= $cbopt->(nosave => 'nosave');
+</fieldset>
+%= submit_button 'commit'
+
+@@ group/list.html.ep
+
+<ul>
+    % foreach my $g (sort @$groups) {
+        <li><%= link_to $g => 'groupinfo' => {grp => $g} %></li>
+    % }
+</ul>
