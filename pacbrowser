@@ -276,12 +276,13 @@ __DATA__
     </thead>
     <tbody>
         % foreach my $pkg (sort { $a->name cmp $b->name } @$packages) {
+            % my ($pname, $dname) = ($pkg->name, $pkg->db->name);
             <tr>
                 <td>
-                    %= link_to $pkg->name => 'pkginfo' => {db => $pkg->db->name, pkgname => $pkg->name}
+                    <a href="/package/info/<%= $dname %>/<%= $pname %>"><%= $pname %></a>
                 </td>
                 <td><%= $pkg->version %></td>
-                <td><%= $pkg->db->name %></td>
+                <td><%= $dname %></td>
                 <td><%= $pkg->desc %></td>
             </tr>
         % }
