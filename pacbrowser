@@ -1,17 +1,17 @@
 #!/usr/bin/perl
 
 # Copyright (c) 2015 Andrew Gregory
-# 
+#
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to
 # deal in the Software without restriction, including without limitation the
 # rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
 # sell copies of the Software, and to permit persons to whom the Software is
 # furnished to do so, subject to the following conditions:
-# 
+#
 # The above copyright notice and this permission notice shall be included in
 # all copies or substantial portions of the Software.
-# 
+#
 # THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 # IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 # FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
@@ -74,8 +74,11 @@ helper pkgurl => sub {
 
 get '/' => sub {
     my ($self) = @_;
-    $self->render( 'package/list',
-        packages => [ $self->alpm->localdb->pkgs ] );
+    $self->render(
+        'package/list',
+        title    => 'Source: local',
+        packages => [ $self->alpm->localdb->pkgs ]
+    );
 };
 
 get '/database/list' => sub {
@@ -85,8 +88,13 @@ get '/database/list' => sub {
 
 get '/database/info/:db' => sub {
     my ($self) = @_;
-    my $db = $self->alpm->db( $self->param('db') );
-    $self->render( 'package/list', packages => [ $db->pkgs ] );
+    my $dbname = $self->param('db');
+    my $db     = $self->alpm->db( $self->param('db') );
+    $self->render(
+        'package/list',
+        title    => "Source: $dbname",
+        packages => [ $db->pkgs ]
+    );
 } => 'dbinfo';
 
 get '/package/info/:db/:pkgname' => sub {
@@ -105,6 +113,7 @@ get '/package/status/foreign' => sub {
     my ($self) = @_;
     $self->render(
         'package/list',
+        title    => 'Status: Local or Obsolete',
         packages => [
             grep { not scalar $self->findsyncpkg( $_->name ) }
               $self->alpm->localdb->pkgs
@@ -117,6 +126,7 @@ get '/package/status/not-installed' => sub {
     my $localdb = $self->alpm->localdb;
     $self->render(
         'package/list',
+        title    => 'Status: Not Installed',
         packages => [
             grep { not $localdb->find( $_->name ) }
             map  { $_->pkgs } $self->alpm->syncdbs
@@ -150,10 +160,13 @@ get '/group/list' => sub {
 get '/group/info/:grp' => sub {
     my ($self) = @_;
     my @packages;
-    foreach my $db ( $self->dbs ) {
-        push @packages, $db->find_group( $self->param('grp') );
-    }
-    $self->render( 'package/list', packages => [@packages] );
+    my $grp = $self->param('grp');
+    push @packages, $_->find_group($grp) foreach $self->dbs;
+    $self->render(
+        'package/list',
+        title    => "Group: $grp",
+        packages => [@packages]
+    );
 } => 'groupinfo';
 
 app->defaults( layout => 'main' );
@@ -265,6 +278,7 @@ __DATA__
 
 @@ package/list.html.ep
 
+<h1><%= stash('title') || 'Packages' %></h1>
 <table>
     <thead>
         <tr>
