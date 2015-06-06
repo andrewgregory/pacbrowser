@@ -25,9 +25,8 @@ use warnings;
 
 our $VERSION = 'v0.0.1';
 
-use List::Util qw( pairkeys );
-
 use ALPM::Conf;
+use List::Util qw( pairkeys );
 use Mojolicious::Lite;
 
 sub uniq {
@@ -115,10 +114,11 @@ get '/package/status/foreign' => sub {
 
 get '/package/status/not-installed' => sub {
     my ($self) = @_;
+    my $localdb = $self->alpm->localdb;
     $self->render(
         'package/list',
         packages => [
-            grep { not $self->findlocalpkg( $_->name ) }
+            grep { not $localdb->find( $_->name ) }
             map  { $_->pkgs } $self->alpm->syncdbs
         ]
     );
